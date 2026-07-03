@@ -135,18 +135,28 @@ def parse_xlsx(path):
 def seed_db():
     print("Parsing Excel file...")
     excel_path = "EnterpriseDatabase.xlsx"
-    db_dir = "enterprise_db"
-    db_path = os.path.join(db_dir, "enterprise.db")
-    
-    os.makedirs(db_dir, exist_ok=True)
     
     data = parse_xlsx(excel_path)
     
-    conn = sqlite3.connect(db_path)
-    cursor = conn.cursor()
+    url = os.environ.get("TURSO_DATABASE_URL")
+    token = os.environ.get("TURSO_AUTH_TOKEN")
     
-    # Enable foreign keys
-    cursor.execute("PRAGMA foreign_keys = ON;")
+    if url and token:
+        print(f"Connecting to remote Turso database at {url}...")
+        from libsql import connect as libsql_connect
+        conn = libsql_connect(url=url, auth_token=token)
+        cursor = conn.cursor()
+    else:
+        db_dir = "enterprise_db"
+        db_path = os.path.join(db_dir, "enterprise.db")
+        os.makedirs(db_dir, exist_ok=True)
+        print(f"Connecting to local SQLite database at {db_path}...")
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+        try:
+            cursor.execute("PRAGMA foreign_keys = ON;")
+        except Exception:
+            pass
     
     # 1. Create tables
     print("Creating tables...")

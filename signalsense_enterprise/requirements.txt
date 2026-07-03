@@ -4,3 +4,4 @@ gcsfs>=2026.6.0
 google-cloud-logging>=3.16.0
 fastapi
 uvicorn
+libsql

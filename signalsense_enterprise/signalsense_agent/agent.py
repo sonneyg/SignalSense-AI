@@ -1,6 +1,7 @@
 import os
 import json
 import sqlite3
+from signalsense_agent.db_helper import get_db_conn
 import datetime
 import random
 from typing import Any, Union, Dict, Optional, List
@@ -236,8 +237,7 @@ def extract_signal(node_input: SignalInput) -> Event:
 
 def process_oos(ctx: Context, node_input: SignalInput) -> Event:
     """Processes an Out-of-Stock (OOS) report, updating inventory and awarding points."""
-    db_path = get_db_path()
-    conn = sqlite3.connect(db_path)
+    conn = get_db_conn()
     cursor = conn.cursor()
     
     member_id = ctx.state.get("member_id")
@@ -367,8 +367,7 @@ def process_oos(ctx: Context, node_input: SignalInput) -> Event:
 
 def handle_suggestion_analysis(ctx: Context, node_input: Any) -> Event:
     """Post-processes LLM classification output and inserts product proposal in DB."""
-    db_path = get_db_path()
-    conn = sqlite3.connect(db_path)
+    conn = get_db_conn()
     cursor = conn.cursor()
     
     member_id = ctx.state.get("member_id")
@@ -555,8 +554,7 @@ def handle_suggestion_analysis(ctx: Context, node_input: Any) -> Event:
 
 def process_upvote(ctx: Context, node_input: SignalInput) -> Event:
     """Processes an upvote for a candidate product, handles threshold crossings."""
-    db_path = get_db_path()
-    conn = sqlite3.connect(db_path)
+    conn = get_db_conn()
     cursor = conn.cursor()
     
     member_id = ctx.state.get("member_id")
@@ -628,8 +626,7 @@ def process_upvote(ctx: Context, node_input: SignalInput) -> Event:
 
 def process_associate_action(ctx: Context, node_input: SignalInput) -> Event:
     """Processes verification and stock actions submitted by club associates."""
-    db_path = get_db_path()
-    conn = sqlite3.connect(db_path)
+    conn = get_db_conn()
     cursor = conn.cursor()
     
     signal_id = ctx.state.get("signal_id")
@@ -801,8 +798,7 @@ def process_associate_action(ctx: Context, node_input: SignalInput) -> Event:
 
 def handle_voice_analysis(ctx: Context, node_input: Any) -> Event:
     """Processes the voice classification output, matching products and routing accordingly."""
-    db_path = get_db_path()
-    conn = sqlite3.connect(db_path)
+    conn = get_db_conn()
     cursor = conn.cursor()
     
     member_id = ctx.state.get("member_id")
@@ -978,8 +974,7 @@ def handle_voice_analysis(ctx: Context, node_input: Any) -> Event:
 
 def process_merchant_action(ctx: Context, node_input: SignalInput) -> Event:
     """Processes product suggestions and threshold review tasks verified by merchants."""
-    db_path = get_db_path()
-    conn = sqlite3.connect(db_path)
+    conn = get_db_conn()
     cursor = conn.cursor()
     
     signal_id = ctx.state.get("signal_id")
@@ -1121,8 +1116,7 @@ def process_merchant_action(ctx: Context, node_input: SignalInput) -> Event:
 
 def process_inventory_action(ctx: Context, node_input: SignalInput) -> Event:
     """Processes replenishment and inventory exception tasks verified by inventory associates."""
-    db_path = get_db_path()
-    conn = sqlite3.connect(db_path)
+    conn = get_db_conn()
     cursor = conn.cursor()
     
     signal_id = ctx.state.get("signal_id")

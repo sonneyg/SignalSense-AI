@@ -42,7 +42,8 @@ def check_and_increment_token(token_id: str) -> dict:
         if not os.path.exists(db_path):
             db_path = "enterprise.db"
     try:
-        conn = sqlite3.connect(db_path)
+        from signalsense_agent.db_helper import get_db_conn
+        conn = get_db_conn()
         cursor = conn.cursor()
         cursor.execute("SELECT current_uses, max_uses, contact_type, contact_info FROM shared_tokens WHERE token_id = ?", (token_id,))
         res = cursor.fetchone()

@@ -11,6 +11,7 @@ dependencies = [
     "jinja2",
     "httpx",
     "python-dotenv",
+    "libsql",
 ]
 requires-python = ">=3.11,<3.13"
 

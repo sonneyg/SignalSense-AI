@@ -43,24 +43,7 @@ def get_db_path():
         return db_path
     return "enterprise.db"
 
-# Database helpers
-def query_db(query, args=(), one=False):
-    db_p = get_db_path()
-    conn = sqlite3.connect(db_p)
-    conn.row_factory = sqlite3.Row
-    cur = conn.cursor()
-    cur.execute(query, args)
-    rv = cur.fetchall()
-    conn.close()
-    return (rv[0] if rv else None) if one else rv
-
-def execute_db(query, args=()):
-    db_p = get_db_path()
-    conn = sqlite3.connect(db_p)
-    cur = conn.cursor()
-    cur.execute(query, args)
-    conn.commit()
-    conn.close()
+from db_helper import query_db, execute_db, get_db_conn
 
 # Initialize test member Sarah Jenkins (non-ambassador) and checkout_sessions table
 try:

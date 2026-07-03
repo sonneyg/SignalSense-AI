@@ -67,24 +67,7 @@ def get_db_path():
         return db_path
     return "enterprise.db"
 
-# Helper to run database queries
-def query_db(query, args=(), one=False):
-    db_path = get_db_path()
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
-    cur = conn.cursor()
-    cur.execute(query, args)
-    rv = cur.fetchall()
-    conn.close()
-    return (rv[0] if rv else None) if one else rv
-
-def execute_db(query, args=()):
-    db_path = get_db_path()
-    conn = sqlite3.connect(db_path)
-    cur = conn.cursor()
-    cur.execute(query, args)
-    conn.commit()
-    conn.close()
+from db_helper import query_db, execute_db, get_db_conn
 
 
 async def invoke_agent(signal_type: str, member_id: str, jti: Optional[str] = None, **kwargs) -> dict:

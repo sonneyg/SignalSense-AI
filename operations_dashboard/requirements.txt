@@ -6,3 +6,4 @@ python-dotenv
 pyjwt
 cryptography
 python-multipart
+libsql
