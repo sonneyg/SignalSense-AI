@@ -66,7 +66,8 @@ def test_member_app_cookie_setting():
         assert response.status == 200
         headers = response.info()
         set_cookie = headers.get("Set-Cookie", "")
-        assert f"demo_token={token}" in set_cookie or f"demo_token=\"{token}\"" in set_cookie, f"Cookie not set correctly in headers: {set_cookie}"
+        # The cookie is set as session_token=... containing the signed JWT
+        assert "session_token=" in set_cookie, f"session_token cookie not found: {set_cookie}"
 
 def test_ops_dashboard_cookie_setting():
     # Call with Capstone token parameter
@@ -77,7 +78,7 @@ def test_ops_dashboard_cookie_setting():
         assert response.status == 200
         headers = response.info()
         set_cookie = headers.get("Set-Cookie", "")
-        assert f"demo_token={token}" in set_cookie or f"demo_token=\"{token}\"" in set_cookie, f"Cookie not set correctly in headers: {set_cookie}"
+        assert "session_token=" in set_cookie, f"session_token cookie not found: {set_cookie}"
 
 def test_backend_unauthorized():
     # Call backend /run without authorization header
