@@ -5,3 +5,4 @@ httpx
 pyjwt
 cryptography
 python-multipart
+python-dotenv

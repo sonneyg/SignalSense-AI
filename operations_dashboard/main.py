@@ -33,6 +33,11 @@ app.add_middleware(RateLimitingMiddleware, max_requests=60, window_seconds=60)
 BACKEND_URL = os.getenv("BACKEND_URL", "http://127.0.0.1:8080")
 
 def get_db_path():
+    db_path = os.getenv("DB_PATH")
+    if db_path:
+        db_dir = os.path.dirname(db_path)
+        if db_dir and os.path.exists(db_dir):
+            return db_path
     db_path = os.path.join(workspace_root, "enterprise_db", "enterprise.db")
     if os.path.exists(db_path):
         return db_path
