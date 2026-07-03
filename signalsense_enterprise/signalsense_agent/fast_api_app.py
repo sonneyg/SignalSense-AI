@@ -30,6 +30,11 @@ import sqlite3
 
 def check_and_increment_token(token_id: str) -> dict:
     db_path = os.getenv("DB_PATH")
+    if db_path:
+        db_dir = os.path.dirname(db_path)
+        if not (db_dir and os.path.exists(db_dir)):
+            db_path = None
+            
     if not db_path:
         current_dir = os.path.dirname(os.path.abspath(__file__))
         workspace_root = os.path.dirname(os.path.dirname(current_dir))
