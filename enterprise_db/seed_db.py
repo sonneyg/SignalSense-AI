@@ -356,7 +356,7 @@ def seed_db():
     cursor.execute("""
     INSERT OR REPLACE INTO shared_tokens (token_id, role, max_uses, current_uses, contact_type, contact_info)
     VALUES (?, ?, ?, ?, ?, ?);
-    """, ('capstone-test-token-2026', 'Associate', 1000, 0, 'email', 'sonneygeorge@example.com'))
+    """, ('capstone-test-token-2026', 'Associate', 1000, 0, 'email', 'sonneyg@gmail.com'))
     
     cursor.execute("""
     INSERT OR REPLACE INTO shared_tokens (token_id, role, max_uses, current_uses, contact_type, contact_info)
