@@ -30,7 +30,7 @@ def get_db_conn():
     
     if url and token:
         from libsql import connect as libsql_connect
-        conn = libsql_connect(url=url, auth_token=token)
+        conn = libsql_connect(url, auth_token=token)
         return conn
     else:
         db_path = get_db_path()
@@ -44,7 +44,7 @@ def query_db(query, args=(), one=False):
     
     if url and token:
         from libsql import connect as libsql_connect
-        conn = libsql_connect(url=url, auth_token=token)
+        conn = libsql_connect(url, auth_token=token)
         cur = conn.cursor()
         cur.execute(query, args)
         rv = cur.fetchall()
@@ -77,7 +77,7 @@ def execute_db(query, args=()):
     
     if url and token:
         from libsql import connect as libsql_connect
-        conn = libsql_connect(url=url, auth_token=token)
+        conn = libsql_connect(url, auth_token=token)
         cur = conn.cursor()
         cur.execute(query, args)
         conn.commit()

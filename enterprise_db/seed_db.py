@@ -144,7 +144,7 @@ def seed_db():
     if url and token:
         print(f"Connecting to remote Turso database at {url}...")
         from libsql import connect as libsql_connect
-        conn = libsql_connect(url=url, auth_token=token)
+        conn = libsql_connect(url, auth_token=token)
         cursor = conn.cursor()
     else:
         db_dir = "enterprise_db"
