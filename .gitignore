@@ -1,0 +1,28 @@
+# Virtual Environment & Packages
+.venv/
+.uv_tools/
+__pycache__/
+*.pyc
+
+# Local Configs & System Files
+.env
+.DS_Store
+
+# Temporary & Lock Files
+~$*
+
+# Video & Presentation Assets (Excluded as per user request)
+*.mp4
+compile_video.py
+convert_webp_to_mp4.py
+test_webp_parse.py
+
+# Slides & Presentation Code (Excluded as per user request)
+slides/
+scratch_generate_html_slides.py
+
+# Draft Documents & Notes (Excluded as per user request)
+*.docx
+
+# Custom Agent Workspace Directories
+.agents/

@@ -1,0 +1,18 @@
+[project]
+name = "member_ambassador_app"
+version = "0.1.0"
+description = "FastAPI web application for Member Ambassador App"
+authors = [
+    {name = "Your Name", email = "your@email.com"},
+]
+dependencies = [
+    "fastapi",
+    "uvicorn",
+    "jinja2",
+    "httpx",
+]
+requires-python = ">=3.11,<3.13"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

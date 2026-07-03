@@ -1,0 +1,19 @@
+[project]
+name = "operations_dashboard"
+version = "0.1.0"
+description = "FastAPI web application for Operations Dashboard (Associate App)"
+authors = [
+    {name = "Your Name", email = "your@email.com"},
+]
+dependencies = [
+    "fastapi",
+    "uvicorn",
+    "jinja2",
+    "httpx",
+    "python-dotenv",
+]
+requires-python = ">=3.11,<3.13"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

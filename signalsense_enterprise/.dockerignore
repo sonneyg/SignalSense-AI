@@ -1,0 +1,29 @@
+# Exclude video generation and text-to-speech elements from docker/deployment builds
+*.mp4
+*.mp3
+*.webp
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.aiff
+*.wav
+
+# Scripts
+compile_video.py
+convert_webp_to_mp4.py
+generate_speech.py
+generate_slide1.py
+
+# Temp directories
+slides/
+temp_webp_frames/
+frames/
+
+# standard exclusions
+.git/
+.venv/
+.env
+__pycache__/
+*.pyc
+.pytest_cache/
