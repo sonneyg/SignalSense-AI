@@ -1292,7 +1292,7 @@ async def get_dashboard(
                                 if (document.getElementById('live_checkout_modal').style.display === 'flex' && !isLocalProgressActive) {{
                                     try {{
                                         liveSpeechRecognition.start();
-                                    } catch(e) {{}}
+                                    }} catch(e) {{}}
                                 }}
                             }}, 500);
                         }}
@@ -1302,7 +1302,7 @@ async def get_dashboard(
                     setTimeout(() => {{
                         const statusElem = document.getElementById('member_speech_status');
                         if (statusElem) {{
-                            statusElem.innerText = '🎙️ Speech recognition not supported. Use presets below.';
+                            statusElem.innerText = '🎙️ Speech recognition not supported on this browser. Use presets below.';
                         }}
                         const micBtn = document.getElementById('member_mic_btn');
                         if (micBtn) {{
