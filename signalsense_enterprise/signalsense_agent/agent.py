@@ -22,6 +22,9 @@ class Config:
 CONFIG = Config()
 
 def get_db_path() -> str:
+    db_path = os.getenv("DB_PATH")
+    if db_path:
+        return db_path
     current_dir = os.path.dirname(os.path.abspath(__file__))
     workspace_root = os.path.dirname(os.path.dirname(current_dir))
     db_path = os.path.join(workspace_root, "enterprise_db", "enterprise.db")

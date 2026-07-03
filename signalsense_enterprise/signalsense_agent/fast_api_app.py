@@ -7,8 +7,8 @@ from dotenv import load_dotenv
 from google.adk.cli.fast_api import get_fast_api_app
 
 # Import local helpers
-from jwt_helper import verify_access_token
-from rate_limiter import RateLimitingMiddleware
+from signalsense_agent.jwt_helper import verify_access_token
+from signalsense_agent.rate_limiter import RateLimitingMiddleware
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(name)s - %(message)s")
@@ -29,11 +29,13 @@ else:
 import sqlite3
 
 def check_and_increment_token(token_id: str) -> dict:
-    current_dir = os.path.dirname(os.path.abspath(__file__))
-    workspace_root = os.path.dirname(os.path.dirname(current_dir))
-    db_path = os.path.join(workspace_root, "enterprise_db", "enterprise.db")
-    if not os.path.exists(db_path):
-        db_path = "enterprise.db"
+    db_path = os.getenv("DB_PATH")
+    if not db_path:
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        workspace_root = os.path.dirname(os.path.dirname(current_dir))
+        db_path = os.path.join(workspace_root, "enterprise_db", "enterprise.db")
+        if not os.path.exists(db_path):
+            db_path = "enterprise.db"
     try:
         conn = sqlite3.connect(db_path)
         cursor = conn.cursor()
