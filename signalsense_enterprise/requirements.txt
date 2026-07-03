@@ -1,0 +1,6 @@
+google-adk[gcp]>=2.3.0,<3.0.0
+opentelemetry-instrumentation-google-genai>=0.7b1
+gcsfs>=2026.6.0
+google-cloud-logging>=3.16.0
+fastapi
+uvicorn
