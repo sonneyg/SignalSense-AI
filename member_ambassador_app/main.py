@@ -357,6 +357,11 @@ GLASS_STYLE = """
         transition: all 0.2s ease;
     }
 
+    select option {
+        background-color: #111827 !important;
+        color: #ffffff !important;
+    }
+
     input:focus, select:focus, textarea:focus {
         outline: none;
         border-color: var(--accent-blue);
@@ -1264,7 +1269,7 @@ async def get_dashboard(
                         isLiveListening = false;
                         document.getElementById('member_mic_btn').style.background = '#ef4444';
                         const statusElem = document.getElementById('member_speech_status');
-                        if (statusElem && (statusElem.innerText.includes('Listening') || statusElem.innerText.includes('Speech error'))) {{
+                        if (statusElem && (statusElem.innerText.includes('Listening') || statusElem.innerText.includes('Speech error') || statusElem.innerText.includes('Microphone inactive'))) {{
                             statusElem.innerText = '🎙️ Microphone inactive. Click microphone to reply.';
                         }}
                     }};
@@ -1277,17 +1282,34 @@ async def get_dashboard(
                     }};
                     
                     liveSpeechRecognition.onerror = function(event) {{
-                        document.getElementById('member_speech_status').innerText = '⚠️ Speech error: ' + event.error;
+                        if (event.error === 'not-allowed') {{
+                            document.getElementById('member_speech_status').innerText = '⚠️ Microphone access blocked. Enable browser permissions to speak.';
+                        }} else {{
+                            document.getElementById('member_speech_status').innerText = '⚠️ Speech error: ' + event.error;
+                        }}
                         if (event.error === 'no-speech') {{
                             setTimeout(() => {{
                                 if (document.getElementById('live_checkout_modal').style.display === 'flex' && !isLocalProgressActive) {{
                                     try {{
                                         liveSpeechRecognition.start();
-                                    }} catch(e) {{}}
+                                    } catch(e) {{}}
                                 }}
                             }}, 500);
                         }}
                     }};
+                }} else {{
+                    // Set unsupported browser state immediately on DOM load
+                    setTimeout(() => {{
+                        const statusElem = document.getElementById('member_speech_status');
+                        if (statusElem) {{
+                            statusElem.innerText = '🎙️ Speech recognition not supported. Use presets below.';
+                        }}
+                        const micBtn = document.getElementById('member_mic_btn');
+                        if (micBtn) {{
+                            micBtn.style.background = '#4b5563';
+                            micBtn.style.cursor = 'not-allowed';
+                        }}
+                    }}, 500);
                 }}
                 
                 function toggleMemberLiveSpeech() {{
@@ -1463,7 +1485,7 @@ async def get_dashboard(
                     
                     <div>
                         <label style="font-size:0.8rem; color:var(--text-muted); font-weight:700; display:block; margin-bottom:6px; text-transform:uppercase;">Your Spoken Response:</label>
-                        <textarea id="member_response_transcript" class="text-input" style="height:60px; width:100%; box-sizing:border-box; outline:none; resize:none; font-family:inherit; padding:10px; border-radius:8px; background:rgba(255,255,255,0.04); border:1px solid var(--glass-border);" placeholder="Listening for speech..."></textarea>
+                        <textarea id="member_response_transcript" class="text-input" style="height:60px; width:100%; box-sizing:border-box; outline:none; resize:none; font-family:inherit; padding:10px; border-radius:8px; background:rgba(255,255,255,0.04); border:1px solid var(--glass-border);" placeholder="Your spoken or selected response will appear here..."></textarea>
                     </div>
 
                     <div id="member_live_presets" style="border-top:1px solid var(--glass-border); padding-top:14px; display:flex; flex-direction:column; gap:8px;">

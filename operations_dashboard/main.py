@@ -478,6 +478,10 @@ GLASS_STYLE = """
     .text-input:focus {
         border-color: var(--accent-blue);
     }
+    select option {
+        background-color: #111825 !important;
+        color: #ffffff !important;
+    }
     .tab {
         text-decoration: none;
     }
