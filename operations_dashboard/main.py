@@ -22,15 +22,42 @@ if backend_path not in sys.path:
 dotenv_path = os.path.join(workspace_root, ".env")
 if os.path.exists(dotenv_path):
     load_dotenv(dotenv_path)
+local_dotenv = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+if os.path.exists(local_dotenv):
+    load_dotenv(local_dotenv)
 
 from jwt_helper import create_access_token, verify_access_token
 from rate_limiter import RateLimitingMiddleware
 
 app = FastAPI(title="Operations Dashboard")
-app.add_middleware(RateLimitingMiddleware, max_requests=60, window_seconds=60)
+app.add_middleware(RateLimitingMiddleware, max_requests=300, window_seconds=60)
 
 # Backend URL config
 BACKEND_URL = os.getenv("BACKEND_URL", "http://127.0.0.1:8080")
+
+from contextlib import aclosing
+
+# Try importing ADK runner for in-process fallback
+try:
+    from google.genai import types as genai_types
+    from google.adk.runners import Runner
+    from google.adk.apps import App
+    from google.adk.auth.credential_service.in_memory_credential_service import InMemoryCredentialService
+    from google.adk.artifacts import InMemoryArtifactService
+    from google.adk.sessions import InMemorySessionService
+    from signalsense_agent.agent import root_agent
+    
+    agentic_app = App(name="signalsense_enterprise", root_agent=root_agent)
+    fallback_runner = Runner(
+        app=agentic_app,
+        artifact_service=InMemoryArtifactService(),
+        session_service=InMemorySessionService(),
+        credential_service=InMemoryCredentialService(),
+        auto_create_session=True,
+    )
+except Exception as ie:
+    fallback_runner = None
+    print(f"ADK runner import failed in Operations Dashboard, in-process fallback disabled: {ie}")
 
 def get_db_path():
     db_path = os.getenv("DB_PATH")
@@ -108,7 +135,7 @@ async def invoke_agent_action(signal_id: str, action: str, jti: Optional[str] = 
                 f"{BACKEND_URL}/run",
                 json=adk_payload,
                 headers={"Authorization": f"Bearer {token}"},
-                timeout=30.0
+                timeout=3.0
             )
             response.raise_for_status()
             
@@ -559,6 +586,7 @@ async def get_dashboard(
         
     checkout_members = []
     checkout_items = []
+    active_session_member_id = ""
         
     similar_map = {}
     if role == "Merchant":
@@ -624,6 +652,13 @@ async def get_dashboard(
         active_tasks = []
         checkout_members = query_db("SELECT MemberID, Name, Ambassador FROM members")
         checkout_items = query_db("SELECT ItemID, ItemDescription FROM items")
+        try:
+            five_mins_ago = (datetime.datetime.now() - datetime.timedelta(minutes=5)).isoformat()
+            execute_db("UPDATE checkout_sessions SET Status = 'Done' WHERE LastUpdated < ? AND Status != 'Done'", (five_mins_ago,))
+        except Exception as e:
+            print(f"Error cleaning up stale sessions: {e}")
+        active_session = query_db("SELECT MemberID FROM checkout_sessions WHERE Status NOT IN ('Done', 'ReadyToCheckout')", one=True)
+        active_session_member_id = active_session["MemberID"] if active_session else ""
         
     else:
         # Query OOS signals assigned to Club Associate that are active
@@ -897,27 +932,42 @@ async def get_dashboard(
                 currentSessionMemberId = memberId;
                 isLiveCheckoutActive = true;
                 
-                document.getElementById('checkout_live_status_panel').style.display = 'flex';
-                document.getElementById('live_status_badge').innerText = 'Pending';
-                document.getElementById('live_status_badge').style.background = '#3b82f6';
-                document.getElementById('live_status_detail').innerText = 'Sending voice inquiry to Member App...';
-                
-                document.getElementById('checkout_transcript').value = '';
-                document.getElementById('checkout_analysis_card').style.display = 'none';
-                document.getElementById('enrollment_agreed_box').style.display = 'none';
-                
-                const formData = new FormData();
-                formData.append('member_id', memberId);
-                
-                fetch('/checkout/start', {{
-                    method: 'POST',
-                    body: formData
+                // Fetch real-time member ambassador status first
+                fetch('/checkout/member-realtime-status?member_id=' + memberId)
+                .then(res => res.json())
+                .then(realtimeData => {{
+                    if (realtimeData && realtimeData.ambassador !== undefined) {{
+                        const isAmb = realtimeData.ambassador === 'Yes';
+                        isAmbassador = isAmb;
+                        const opt = select.options[select.selectedIndex];
+                        if (opt) {{
+                            opt.setAttribute('data-ambassador', isAmb ? 'Yes' : 'No');
+                        }}
+                        updateMemberStatus();
+                    }}
+                    
+                    document.getElementById('checkout_live_status_panel').style.display = 'flex';
+                    document.getElementById('live_status_badge').innerText = 'Pending';
+                    document.getElementById('live_status_badge').style.background = '#3b82f6';
+                    document.getElementById('live_status_detail').innerText = 'Sending voice inquiry to Member App...';
+                    
+                    document.getElementById('checkout_transcript').value = '';
+                    document.getElementById('checkout_analysis_card').style.display = 'none';
+                    document.getElementById('enrollment_agreed_box').style.display = 'none';
+                    
+                    const formData = new FormData();
+                    formData.append('member_id', memberId);
+                    
+                    return fetch('/checkout/start', {{
+                        method: 'POST',
+                        body: formData
+                    }});
                 }})
                 .then(res => res.json())
                 .then(data => {{
                     document.getElementById('live_status_detail').innerText = 'Voice inquiry sent! Waiting for member reply...';
                     if (livePollInterval) clearInterval(livePollInterval);
-                    livePollInterval = setInterval(pollSessionStatus, 1500);
+                    livePollInterval = setInterval(pollSessionStatus, 400);
                 }})
                 .catch(err => {{
                     document.getElementById('live_status_detail').innerText = 'Error initiating inquiry: ' + err;
@@ -928,7 +978,10 @@ async def get_dashboard(
                 if (!currentSessionMemberId) return;
                 
                 fetch('/checkout/poll-associate?member_id=' + currentSessionMemberId)
-                .then(res => res.json())
+                .then(res => {{
+                    if (!res.ok) throw new Error("HTTP error " + res.status);
+                    return res.json();
+                }})
                 .then(data => {{
                     if (data.status === 'none') {{
                         isLiveCheckoutActive = false;
@@ -941,6 +994,13 @@ async def get_dashboard(
                     
                     if (data.is_ambassador !== undefined) {{
                         isAmbassador = data.is_ambassador;
+                        const sel = document.getElementById('checkout_member_select');
+                        if (sel) {{
+                            const opt = sel.options[sel.selectedIndex];
+                            if (opt) {{
+                                opt.setAttribute('data-ambassador', isAmbassador ? 'Yes' : 'No');
+                            }}
+                        }}
                     }}
                     
                     const badge = document.getElementById('live_status_badge');
@@ -970,20 +1030,20 @@ async def get_dashboard(
                             if (selectedItemId) {{
                                 if (!isAmbassador) {{
                                     // Not an ambassador: automatically propose enrollment!
-                                    setTimeout(proposeAmbassadorEnrollment, 1500);
+                                    setTimeout(proposeAmbassadorEnrollment, 300);
                                 }} else {{
                                     // Already an ambassador: automatically submit stock-out to pipeline!
                                     setTimeout(() => {{
                                         document.getElementById('checkout_oos_form').submit();
-                                    }}, 2000);
+                                    }}, 800);
                                 }}
                             }} else {{
-                                // Negative intent but item not matched: ask them to repeat!
-                                setTimeout(requestRepeatInquiry, 1500);
+                                // Negative intent but item not matched (not carried): propose new product suggestion!
+                                setTimeout(proposeProductProposal, 300);
                             }}
                         }} else {{
-                            // Satisfied customer (no stock gap): automatically close session after 2 seconds
-                            setTimeout(closeCheckoutSession, 2000);
+                            // Satisfied customer (no stock gap): automatically close session after 800ms
+                            setTimeout(closeCheckoutSession, 800);
                         }}
                     }} else if (data.status === 'EnrollmentProposed') {{
                         badge.innerText = 'Enrollment';
@@ -998,22 +1058,46 @@ async def get_dashboard(
                         livePollInterval = null;
                         
                         const ans = data.enrollment_answer.toLowerCase();
-                        if (ans.includes('point') || ans.includes('benefit') || ans.includes('what') || ans.includes('why') || ans.includes('how')) {{
-                            // Explain benefits!
-                            setTimeout(explainAmbassadorBenefits, 1500);
-                        }} else if (ans.includes('yes') || ans.includes('yeah') || ans.includes('sure') || ans.includes('ok') || ans.includes('interest')) {{
-                            // Step 1: Enroll the member via backend (sets status to EnrollmentComplete)
-                            enrollMemberAsync();
+                        const positiveWords = ['yes', 'yeah', 'sure', 'ok', 'enroll', 'join', 'sign up', 'interest', 'agree', 'please', 'would like to', 'yup', 'yep'];
+                        const negativeWords = ['no', 'dont', "don't", 'decline', 'nah', 'not', 'skip', 'pass', 'thank', 'reject', 'cancel'];
+                        
+                        const hasPositive = positiveWords.some(w => ans.includes(w));
+                        const hasNegative = negativeWords.some(w => ans.includes(w));
+                        
+                        // Check if this was a product suggestion proposal or ambassador enrollment proposal
+                        const isProductProposal = data.associate_question.toLowerCase().includes("carry") || data.associate_question.toLowerCase().includes("suggest");
+                        
+                        if (isProductProposal) {{
+                            if (hasPositive && !hasNegative) {{
+                                document.getElementById('enrollment_agreed_box').style.display = 'block';
+                                document.getElementById('enrollment_agreed_box').innerText = '✓ Member agreed to propose new product!';
+                                document.getElementById('enrollment_agreed_box').style.borderColor = 'rgba(16, 185, 129, 0.2)';
+                                document.getElementById('enrollment_agreed_box').style.color = '#10b981';
+                                submitProductProposalFromCheckout();
+                            }} else {{
+                                document.getElementById('enrollment_agreed_box').style.display = 'block';
+                                document.getElementById('enrollment_agreed_box').innerText = '✗ Member declined to propose new product.';
+                                document.getElementById('enrollment_agreed_box').style.borderColor = 'rgba(239, 68, 68, 0.2)';
+                                document.getElementById('enrollment_agreed_box').style.color = '#ef4444';
+                                setTimeout(closeCheckoutSession, 800);
+                            }}
                         }} else {{
-                            document.getElementById('enrollment_agreed_box').style.display = 'block';
-                            document.getElementById('enrollment_agreed_box').innerText = '✗ Member replied NO / declined enrollment.';
-                            document.getElementById('enrollment_agreed_box').style.borderColor = 'rgba(239, 68, 68, 0.2)';
-                            document.getElementById('enrollment_agreed_box').style.color = '#ef4444';
-                            document.getElementById('submit_oos_pipeline_btn').style.display = 'block';
-                            // Automatically submit the stock-out (without enrollment) to trigger the pipeline!
-                            setTimeout(() => {{
-                                document.getElementById('checkout_oos_form').submit();
-                            }}, 2500);
+                            // Ambassador enrollment flow
+                            if (hasPositive && !hasNegative) {{
+                                enrollMemberAsync();
+                            }} else if (hasNegative) {{
+                                document.getElementById('enrollment_agreed_box').style.display = 'block';
+                                document.getElementById('enrollment_agreed_box').innerText = '✗ Member replied NO / declined enrollment.';
+                                document.getElementById('enrollment_agreed_box').style.borderColor = 'rgba(239, 68, 68, 0.2)';
+                                document.getElementById('enrollment_agreed_box').style.color = '#ef4444';
+                                document.getElementById('submit_oos_pipeline_btn').style.display = 'block';
+                                setTimeout(() => {{
+                                    document.getElementById('checkout_oos_form').submit();
+                                }}, 800);
+                            }} else {{
+                                // Ambiguous, questions, or transcript errors (e.g. "bachelor program") -> explain benefits!
+                                setTimeout(explainAmbassadorBenefits, 300);
+                            }}
                         }}
                         
                         document.getElementById('enroll_action_box').style.display = 'none';
@@ -1041,7 +1125,8 @@ async def get_dashboard(
                         // Step 2: Now submit OOS pipeline after member TTS finishes enrollment confirmation
                         setTimeout(() => {{
                             document.getElementById('checkout_oos_form').submit();
-                        }}, 10000);
+                        }}, 4000);
+                    }}
                 }})
                 .catch(err => {{
                     console.error("Poll session status error:", err);
@@ -1067,7 +1152,7 @@ async def get_dashboard(
                 .then(data => {{
                     document.getElementById('live_status_detail').innerText = 'Enrollment prompt playing. Waiting for reply...';
                     if (livePollInterval) clearInterval(livePollInterval);
-                    livePollInterval = setInterval(pollSessionStatus, 1500);
+                    livePollInterval = setInterval(pollSessionStatus, 400);
                 }})
                 .catch(err => {{
                     console.error("Propose enrollment error:", err);
@@ -1077,6 +1162,79 @@ async def get_dashboard(
                 }});
             }}
             
+            function extractItemName(text) {{
+                const keywords = ["couldn't find", "could not find", "did not find", "didn't find", "don't have", "do not have", "missing", "find"];
+                let lower = text.toLowerCase();
+                for (let kw of keywords) {{
+                    let idx = lower.indexOf(kw);
+                    if (idx !== -1) {{
+                        let item = text.substring(idx + kw.length).trim();
+                        item = item.replace(/^(the|a|an|some)\s+/i, '');
+                        item = item.replace(/[.,\/#!$%\^&\*;:{{}}=\-_`~()?]/g, "");
+                        return item;
+                    }}
+                }}
+                return text;
+            }}
+
+            function proposeProductProposal() {{
+                if (!currentSessionMemberId) return;
+                
+                const transcript = document.getElementById('checkout_transcript').value;
+                const itemName = extractItemName(transcript) || "this item";
+                
+                document.getElementById('live_status_badge').innerText = 'Proposal';
+                document.getElementById('live_status_badge').style.background = '#3b82f6';
+                document.getElementById('live_status_detail').innerText = 'Proposing new product suggestion...';
+                
+                const formData = new FormData();
+                formData.append('member_id', currentSessionMemberId);
+                formData.append('item_name', itemName);
+                
+                fetch('/checkout/propose-proposal', {{
+                    method: 'POST',
+                    body: formData
+                }})
+                .then(res => res.json())
+                .then(data => {{
+                    document.getElementById('live_status_detail').innerText = 'Proposing new product suggestion: ' + itemName;
+                    
+                    if (livePollInterval) clearInterval(livePollInterval);
+                    livePollInterval = setInterval(pollSessionStatus, 400);
+                }})
+                .catch(err => {{
+                    console.error("Propose proposal error:", err);
+                    document.getElementById('live_status_detail').innerText = 'Error proposing product suggestion. Completing checkout...';
+                    setTimeout(closeCheckoutSession, 1200);
+                }});
+            }}
+
+            function submitProductProposalFromCheckout() {{
+                if (!currentSessionMemberId) return;
+                
+                document.getElementById('live_status_badge').innerText = 'Proposing';
+                document.getElementById('live_status_badge').style.background = '#3b82f6';
+                document.getElementById('live_status_detail').innerText = 'Logging product suggestion to merchants...';
+                
+                const formData = new FormData();
+                formData.append('member_id', currentSessionMemberId);
+                
+                fetch('/checkout/submit-proposal-from-checkout', {{
+                    method: 'POST',
+                    body: formData
+                }})
+                .then(res => res.json())
+                .then(data => {{
+                    document.getElementById('live_status_detail').innerText = 'Proposal successfully logged! Completing checkout...';
+                    setTimeout(closeCheckoutSession, 1200);
+                }})
+                .catch(err => {{
+                    console.error("Propose error:", err);
+                    document.getElementById('live_status_detail').innerText = 'Error proposing product. Completing checkout...';
+                    setTimeout(closeCheckoutSession, 1200);
+                }});
+            }}
+
             function requestRepeatInquiry() {{
                 if (!currentSessionMemberId) return;
                 
@@ -1096,7 +1254,7 @@ async def get_dashboard(
                     document.getElementById('checkout_transcript').value = '';
                     
                     if (livePollInterval) clearInterval(livePollInterval);
-                    livePollInterval = setInterval(pollSessionStatus, 1500);
+                    livePollInterval = setInterval(pollSessionStatus, 400);
                 }})
                 .catch(err => {{
                     console.error("Request repeat error:", err);
@@ -1121,7 +1279,7 @@ async def get_dashboard(
                     document.getElementById('live_status_badge').style.background = '#3b82f6';
                     
                     if (livePollInterval) clearInterval(livePollInterval);
-                    livePollInterval = setInterval(pollSessionStatus, 1500);
+                    livePollInterval = setInterval(pollSessionStatus, 400);
                 }})
                 .catch(err => {{
                     console.error("Explain benefits error:", err);
@@ -1293,7 +1451,7 @@ async def get_dashboard(
                 .then(data => {{
                     // Resume polling to pick up the EnrollmentComplete status
                     if (livePollInterval) clearInterval(livePollInterval);
-                    livePollInterval = setInterval(pollSessionStatus, 1500);
+                    livePollInterval = setInterval(pollSessionStatus, 400);
                 }})
                 .catch(err => {{
                     document.getElementById('live_status_detail').innerText = 'Error enrolling: ' + err;
@@ -1301,7 +1459,7 @@ async def get_dashboard(
             }}
             
             function analyzeTranscript() {{
-                const text = document.getElementById('checkout_transcript').value.trim().toLowerCase();
+                const text = document.getElementById('checkout_transcript').value.trim().toLowerCase().replace(/’/g, "'");
                 const analysisCard = document.getElementById('checkout_analysis_card');
                 
                 if (!text) {{
@@ -1311,7 +1469,13 @@ async def get_dashboard(
                 
                 analysisCard.style.display = 'flex';
                 
-                const negKeywords = ['missing', 'out of stock', 'empty', "couldn't find", "not find", "no", "don't have", "missing"];
+                const negKeywords = [
+                    'missing', 'out of stock', 'empty', "couldn't", "could not", "not find", 
+                    "no", "don't have", "unable", "can't", "cant", "cannot", "wasn't", 
+                    "was not", "didn't", "did not", "unavailable", "out of", "ran out", 
+                    "no more", "sold out", "gone", "empty shelf", "empty shelves", 
+                    "not in stock", "not on the shelf", "not on shelf", "not here"
+                ];
                 hasNeg = negKeywords.some(kw => text.includes(kw));
                 
                 const oosDetectedSpan = document.getElementById('analysis_oos_detected');
@@ -1381,18 +1545,10 @@ async def get_dashboard(
                         document.getElementById('arrival_alert_text').innerText = '🔔 Member ' + memberName + ' has arrived at the checkout counter!';
                         alertDiv.style.display = 'flex';
                         
-                        // Automatically select and activate live checkout register panel
+                        // Automatically select and initiate live checkout voice inquiry!
                         select.value = arrivedId;
                         updateMemberStatus();
-                        
-                        isLiveCheckoutActive = true;
-                        document.getElementById('checkout_live_status_panel').style.display = 'flex';
-                        document.getElementById('live_status_detail').innerText = 'Voice inquiry sent! Waiting for member reply...';
-                        document.getElementById('live_status_badge').innerText = 'Pending';
-                        document.getElementById('live_status_badge').style.background = '#3b82f6';
-                        
-                        if (livePollInterval) clearInterval(livePollInterval);
-                        livePollInterval = setInterval(pollSessionStatus, 1500);
+                        startLiveInquiry();
                         alertDiv.style.display = 'none';
                     }} else {{
                         alertDiv.style.display = 'none';
@@ -1416,6 +1572,21 @@ async def get_dashboard(
             window.addEventListener('DOMContentLoaded', () => {{
                 updateMemberStatus();
                 initArrivalPolling();
+                
+                // Resuming active session if one exists
+                const activeResumedMemberId = "{active_session_member_id}";
+                if (activeResumedMemberId) {{
+                    const select = document.getElementById('checkout_member_select');
+                    if (select) {{
+                        select.value = activeResumedMemberId;
+                        updateMemberStatus();
+                        currentSessionMemberId = activeResumedMemberId;
+                        isLiveCheckoutActive = true;
+                        document.getElementById('checkout_live_status_panel').style.display = 'flex';
+                        if (livePollInterval) clearInterval(livePollInterval);
+                        livePollInterval = setInterval(pollSessionStatus, 400);
+                    }}
+                }}
             }});
         </script>
         """
@@ -1998,7 +2169,7 @@ async def execute_merchant_action(
                     f"{BACKEND_URL}/run",
                     json=adk_payload,
                     headers={"Authorization": f"Bearer {token}"},
-                    timeout=30.0
+                    timeout=3.0
                 )
                 response.raise_for_status()
         except httpx.HTTPStatusError as hse:
@@ -2092,7 +2263,7 @@ async def execute_inventory_action(
                     f"{BACKEND_URL}/run",
                     json=adk_payload,
                     headers={"Authorization": f"Bearer {token}"},
-                    timeout=30.0
+                    timeout=3.0
                 )
                 response.raise_for_status()
         except httpx.HTTPStatusError as hse:
@@ -2134,6 +2305,7 @@ async def execute_checkout_oos(
     item_id: str = Form(...),
     enroll_ambassador: str = Form("false")
 ):
+    custom_completed_msg = None
     try:
         # Extract jti from request cookies
         token_cookie = request.cookies.get("session_token")
@@ -2157,6 +2329,7 @@ async def execute_checkout_oos(
             "item_id": item_id
         }
         
+        events = []
         try:
             async with httpx.AsyncClient() as client:
                 adk_payload = {
@@ -2180,19 +2353,36 @@ async def execute_checkout_oos(
                     f"{BACKEND_URL}/run",
                     json=adk_payload,
                     headers={"Authorization": f"Bearer {token}"},
-                    timeout=30.0
+                    timeout=3.0
                 )
                 response.raise_for_status()
-        except httpx.HTTPStatusError as hse:
-            error_detail = "OOS trigger rejected by backend"
-            try:
-                error_detail = hse.response.json().get("detail", error_detail)
-            except Exception:
-                pass
-            raise ValueError(error_detail)
+                events = response.json()
+        except Exception as http_err:
+            if not fallback_runner:
+                raise ValueError(f"HTTP call to backend failed and in-process fallback is disabled. Connection error: {http_err}")
+            
+            print(f"HTTP call to backend failed ({http_err}). Falling back to in-process execution in Operations Dashboard...")
+            
+            session_id = str(uuid.uuid4())
+            new_message = genai_types.Content(
+                role="user",
+                parts=[genai_types.Part(text=json.dumps(payload))],
+            )
+            
+            async with aclosing(
+                fallback_runner.run_async(
+                    user_id="operations-app",
+                    session_id=session_id,
+                    new_message=new_message,
+                )
+            ) as agen:
+                async for event in agen:
+                    if hasattr(event, 'model_dump'):
+                        events.append(event.model_dump())
+                    elif isinstance(event, dict):
+                        events.append(event)
             
         # Check backend response
-        events = response.json()
         status_str = "Success"
         msg_str = ""
         for event in reversed(events):
@@ -2208,6 +2398,9 @@ async def execute_checkout_oos(
         enroll_status = "Enrolled member & triggered pipeline." if enroll_ambassador == "true" else "Triggered stock-out pipeline."
         full_msg = f"{enroll_status} {msg_str}"
         
+        # Set custom completed message for the member's device to provide feedback on the OOS report!
+        custom_completed_msg = f"Thank you! Your checkout is complete. {msg_str}"
+        
         return RedirectResponse(
             url=f"/dashboard?role=Checkout_Associate&success={full_msg}",
             status_code=status.HTTP_303_SEE_OTHER
@@ -2217,6 +2410,7 @@ async def execute_checkout_oos(
         if "already reported" in err_msg.lower() or "duplicate" in err_msg.lower() or "under review" in err_msg.lower():
             enroll_status = "Enrolled member!" if enroll_ambassador == "true" else "Checkout completed."
             full_msg = f"{enroll_status} (Note: Stock-out report was already submitted and is under review)"
+            custom_completed_msg = "Thank you! Your checkout is complete. Note that this item was already reported and is under review."
             return RedirectResponse(
                 url=f"/dashboard?role=Checkout_Associate&success={full_msg}",
                 status_code=status.HTTP_303_SEE_OTHER
@@ -2227,7 +2421,7 @@ async def execute_checkout_oos(
         )
     finally:
         try:
-            msg = "Thank you! Your checkout is complete. Your out-of-stock report has been successfully submitted!"
+            msg = custom_completed_msg or "Thank you! Your checkout is complete. Your out-of-stock report has been successfully submitted!"
             execute_db(
                 "UPDATE checkout_sessions SET Status = 'Completed', AssociateQuestion = ?, LastUpdated = ? WHERE MemberID = ?",
                 (msg, datetime.datetime.now().isoformat(), member_id)
@@ -2323,6 +2517,128 @@ async def propose_enrollment(request: Request, member_id: str = Form(...)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.post("/checkout/propose-proposal")
+async def propose_proposal(request: Request, member_id: str = Form(...), item_name: str = Form(...)):
+    # Verify JWT associate role
+    token = request.cookies.get("session_token") or (
+        request.headers.get("Authorization").split(" ")[1]
+        if request.headers.get("Authorization") and request.headers.get("Authorization").startswith("Bearer ")
+        else None
+    )
+    if not token:
+        raise HTTPException(status_code=401, detail="Unauthorized: Missing token")
+    try:
+        claims = verify_access_token(token)
+        if claims.get("role") not in ("Club_Associate", "Merchant", "Inventory_Associate", "Checkout_Associate"):
+            raise HTTPException(status_code=403, detail="Forbidden: Unprivileged role")
+    except Exception as e:
+        raise HTTPException(status_code=401, detail=f"Unauthorized: {str(e)}")
+
+    try:
+        question_text = f"We don't currently carry {item_name}. Would you like to suggest it as a new product for our merchants to consider?"
+        execute_db(
+            "UPDATE checkout_sessions SET Status = 'ProposalProposed', AssociateQuestion = ?, MemberResponse = ?, LastUpdated = ? WHERE MemberID = ?",
+            (question_text, item_name, datetime.datetime.now().isoformat(), member_id)
+        )
+        return {"status": "success", "message": "Product proposal inquiry sent to member app."}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/checkout/submit-proposal-from-checkout")
+async def submit_proposal_from_checkout(request: Request, member_id: str = Form(...)):
+    # Verify JWT associate role
+    token = request.cookies.get("session_token") or (
+        request.headers.get("Authorization").split(" ")[1]
+        if request.headers.get("Authorization") and request.headers.get("Authorization").startswith("Bearer ")
+        else None
+    )
+    if not token:
+        raise HTTPException(status_code=401, detail="Unauthorized: Missing token")
+    try:
+        claims = verify_access_token(token)
+        if claims.get("role") not in ("Club_Associate", "Merchant", "Inventory_Associate", "Checkout_Associate"):
+            raise HTTPException(status_code=403, detail="Forbidden: Unprivileged role")
+    except Exception as e:
+        raise HTTPException(status_code=401, detail=f"Unauthorized: {str(e)}")
+
+    try:
+        import random
+        # Get the uncarried item name stored in MemberResponse
+        row = query_db("SELECT MemberResponse FROM checkout_sessions WHERE MemberID = ?", (member_id,), one=True)
+        item_name = row["MemberResponse"] if row else "New Product"
+        
+        conn = get_db_conn()
+        cursor = conn.cursor()
+        
+        today_str = datetime.date.today().isoformat()
+        candidate_id = f"P{int(datetime.datetime.now().timestamp())}{random.randint(10, 99)}"
+        signal_id = f"S{int(datetime.datetime.now().timestamp())}{random.randint(10, 99)}"
+        
+        # 1. Insert new candidate product
+        cursor.execute(
+            "INSERT INTO candidate_products (CandidateID, ItemDescription, PhotoURL, StoreWhereFound, MemberIDProposer, ProposalDate, UpVotes, Status, Threshold) "
+            "VALUES (?, ?, NULL, NULL, ?, ?, 1, 'New', 10)",
+            (candidate_id, f"Produce - {item_name} (Trending Items)", member_id, today_str)
+        )
+        
+        # 2. Log signal
+        cursor.execute(
+            "INSERT INTO signals (SignalID, MemberID, ClubID, SignalType, ItemID, CandidateID, Status, AssignedRole, Created) "
+            "VALUES (?, ?, NULL, 'ProductSuggestion', NULL, ?, 'New', 'Merchant', ?)",
+            (signal_id, member_id, candidate_id, today_str)
+        )
+        
+        # 3. Check if member is Ambassador to award points
+        cursor.execute("SELECT Ambassador FROM members WHERE MemberID = ?", (member_id,))
+        m_row = cursor.fetchone()
+        is_ambassador = m_row and m_row[0] == "Yes"
+        
+        points = 0
+        if is_ambassador:
+            cursor.execute("SELECT Points, TrustIncrease FROM reward_rules WHERE RuleID = 'RR002'")
+            pts_res = cursor.fetchone()
+            points = pts_res[0] if pts_res else 1
+            trust = pts_res[1] if pts_res else 0
+            
+            cursor.execute(
+                "UPDATE members SET SamsPoints = SamsPoints + ?, TrustScore = TrustScore + ? WHERE MemberID = ?",
+                (points, trust, member_id)
+            )
+            
+        conn.commit()
+        conn.close()
+        
+        # Update session question to show success message
+        msg = f"Thank you! Your checkout is complete. Your product proposal for '{item_name}' was submitted!"
+        if is_ambassador and points > 0:
+            msg += f" Awarded {points} points."
+            
+        execute_db(
+            "UPDATE checkout_sessions SET Status = 'Done', AssociateQuestion = ?, LastUpdated = ? WHERE MemberID = ?",
+            (msg, datetime.datetime.now().isoformat(), member_id)
+        )
+        return {"status": "success", "message": "Proposal successfully submitted."}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/checkout/member-realtime-status")
+async def member_realtime_status(request: Request, member_id: str):
+    # Verify JWT associate/checkout role
+    token = request.cookies.get("session_token")
+    if not token:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    try:
+        claims = verify_access_token(token)
+        if claims.get("role") not in ("Club_Associate", "Merchant", "Inventory_Associate", "Checkout_Associate"):
+            raise HTTPException(status_code=403, detail="Forbidden")
+    except Exception:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+        
+    row = query_db("SELECT Ambassador FROM members WHERE MemberID = ?", (member_id,), one=True)
+    if not row:
+        return {"ambassador": "No"}
+    return {"ambassador": row["Ambassador"]}
+
 @app.get("/checkout/poll-associate")
 async def poll_associate(request: Request, member_id: str):
     # Verify JWT associate role
@@ -2341,11 +2657,15 @@ async def poll_associate(request: Request, member_id: str):
         raise HTTPException(status_code=401, detail=f"Unauthorized: {str(e)}")
 
     try:
-        row = query_db("SELECT * FROM checkout_sessions WHERE MemberID = ?", (member_id,), one=True)
+        row = query_db(
+            "SELECT c.Status, c.AssociateQuestion, c.MemberResponse, c.EnrollmentAnswer, c.MatchedItemID, m.Ambassador "
+            "FROM checkout_sessions c "
+            "LEFT JOIN members m ON c.MemberID = m.MemberID "
+            "WHERE c.MemberID = ?", (member_id,), one=True
+        )
         if not row:
             return {"status": "none"}
-        member = query_db("SELECT Ambassador FROM members WHERE MemberID = ?", (member_id,), one=True)
-        is_amb_val = member and member["Ambassador"] == "Yes"
+        is_amb_val = row["Ambassador"] == "Yes"
         return {
             "status": row["Status"],
             "associate_question": row["AssociateQuestion"],
@@ -2513,7 +2833,7 @@ async def get_active_arrivals(request: Request):
     except Exception as e:
         raise HTTPException(status_code=401, detail=f"Unauthorized: {str(e)}")
     try:
-        rows = query_db("SELECT MemberID FROM checkout_sessions WHERE Status NOT IN ('Done')")
+        rows = query_db("SELECT MemberID FROM checkout_sessions WHERE Status = 'ReadyToCheckout'")
         return {"arrivals": [r["MemberID"] for r in rows]}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

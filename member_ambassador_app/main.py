@@ -24,6 +24,9 @@ if backend_path not in sys.path:
 dotenv_path = os.path.join(workspace_root, ".env")
 if os.path.exists(dotenv_path):
     load_dotenv(dotenv_path)
+local_dotenv = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+if os.path.exists(local_dotenv):
+    load_dotenv(local_dotenv)
 
 # Try importing ADK runner for in-process fallback
 try:
@@ -51,7 +54,7 @@ from jwt_helper import create_access_token, verify_access_token
 from rate_limiter import RateLimitingMiddleware
 
 app = FastAPI(title="Member Ambassador App")
-app.add_middleware(RateLimitingMiddleware, max_requests=60, window_seconds=60)
+app.add_middleware(RateLimitingMiddleware, max_requests=300, window_seconds=60)
 
 # Get backend agent URL (defaults to localhost port 8080)
 BACKEND_URL = os.getenv("BACKEND_URL", "http://127.0.0.1:8080")
@@ -101,20 +104,12 @@ async def invoke_agent(signal_type: str, member_id: str, jti: Optional[str] = No
                 f"{BACKEND_URL}/run",
                 json=adk_payload,
                 headers={"Authorization": f"Bearer {token}"},
-                timeout=30.0
+                timeout=3.0
             )
             response.raise_for_status()
             # Standard ADK response is a list of Event objects.
             # We return a placeholder success dictionary since the backend has executed and committed to the database.
             return {"status": "ok", "events": response.json()}
-    except httpx.HTTPStatusError as hse:
-        # For HTTP 401 or 403 authorization and quota errors, propagate directly without fallback
-        error_detail = "Request rejected by backend"
-        try:
-            error_detail = hse.response.json().get("detail", error_detail)
-        except Exception:
-            pass
-        raise ValueError(error_detail)
     except Exception as e:
         print(f"HTTP call to backend failed ({e}). Falling back to in-process execution...")
         
@@ -463,7 +458,7 @@ GLASS_STYLE = """
 # 1. Login & Registration Page
 # ------------------------------------------------------------------------------
 @app.get("/", response_class=HTMLResponse)
-async def get_login(error: Optional[str] = None, demo_token: Optional[str] = None):
+async def get_login(error: Optional[str] = None, success: Optional[str] = None, demo_token: Optional[str] = None):
     members = query_db("SELECT MemberID, Name, Ambassador FROM members")
     
     options = ""
@@ -474,6 +469,8 @@ async def get_login(error: Optional[str] = None, demo_token: Optional[str] = Non
     alert_html = ""
     if error:
         alert_html = f"<div class='alert alert-danger' style='width: 100%; max-width: 900px; margin-bottom: 24px;'><strong>Error!</strong> {error}</div>"
+    elif success:
+        alert_html = f"<div class='alert alert-success' style='width: 100%; max-width: 900px; margin-bottom: 24px;'><strong>Success!</strong> {success}</div>"
         
     html = f"""
     <!DOCTYPE html>
@@ -507,6 +504,9 @@ async def get_login(error: Optional[str] = None, demo_token: Optional[str] = Non
                                     </select>
                                 </div>
                                 <button type="submit" class="btn" style="width: 100%; margin-top: 10px;">Enter Portal</button>
+                            </form>
+                            <form action="/debug/reset-ambassadors" method="POST" style="margin-top: 15px; border-top: 1px solid var(--glass-border); padding-top: 15px;">
+                                <button type="submit" class="btn" style="width: 100%; background: rgba(239, 68, 68, 0.15); border: 1px solid rgba(239, 68, 68, 0.2); color: #ef4444; font-size: 0.8rem; font-weight:700;">🛠️ Reset All Profiles to Non-Ambassador</button>
                             </form>
                         </div>
                     </div>
@@ -582,6 +582,14 @@ async def do_login(request: Request, member_id: str = Form(...)):
         samesite="lax"
     )
     return response
+
+@app.post("/debug/reset-ambassadors")
+async def debug_reset_ambassadors():
+    try:
+        execute_db("UPDATE members SET Ambassador = 'No' WHERE 1 = ?", (1,))
+        return RedirectResponse(url="/?success=All member profiles successfully reset to Non-Ambassador for testing!", status_code=status.HTTP_303_SEE_OTHER)
+    except Exception as e:
+        return RedirectResponse(url=f"/?error=Error resetting: {str(e)}", status_code=status.HTTP_303_SEE_OTHER)
 
 @app.post("/register")
 async def do_register(name: str = Form(...), club_id: str = Form(...)):
@@ -717,28 +725,26 @@ async def get_dashboard(
     if not member:
         return RedirectResponse(url="/")
         
-    # Automatically register check-in status at checkout counter on login/page load and start live inquiry if none exists
+    # Check if an active checkout session exists for this member (do not automatically check in)
     existing_session = query_db("SELECT Status FROM checkout_sessions WHERE MemberID = ?", (member_id,), one=True)
-    if not existing_session:
-        execute_db(
-            "INSERT INTO checkout_sessions (MemberID, Status, AssociateQuestion, MemberResponse, EnrollmentAnswer, MatchedItemID, LastUpdated) "
-            "VALUES (?, 'PendingInquiry', 'Were you able to find everything you came to buy today?', NULL, NULL, NULL, ?)",
-            (member_id, datetime.datetime.now().isoformat())
-        )
-        is_checked_in = True
-    else:
+    if existing_session:
         is_checked_in = existing_session['Status'] != 'Done'
+    else:
+        is_checked_in = False
 
     if not is_checked_in:
         checkout_status_html = f"""
         <div class="glass-card" style="display:flex; flex-direction:column; gap:12px; margin-bottom:20px; border-color: rgba(255, 255, 255, 0.15);">
             <h2 style="color:var(--text-muted)">📍 Checkout Counter Status</h2>
             <div style="display:flex; align-items:center; justify-content:space-between; background:rgba(255, 255, 255, 0.02); border:1px solid var(--glass-border); padding:14px; border-radius:10px; margin-top:4px; flex-wrap:wrap; gap:12px;">
-                <div style="display:flex; align-items:center; gap:10px;">
-                    <span style="font-size:1.1rem; color:var(--text-muted);">⚫</span>
-                    <span style="color:var(--text-muted); font-size:0.9rem; font-weight:600; line-height:1.4;">Status: Not checked in at Checkout Counter.</span>
+                <div style="display:flex; flex-direction:column; gap:4px;">
+                    <div style="display:flex; align-items:center; gap:10px;">
+                        <span style="font-size:1.1rem; color:var(--text-muted);">⚫</span>
+                        <span style="color:var(--text-muted); font-size:0.9rem; font-weight:600; line-height:1.4;">Status: Not checked in at Checkout Counter.</span>
+                    </div>
+                    <span style="color:var(--text-muted); font-size:0.8rem; font-weight:normal; margin-left:26px;">(This simulates checkout counter behaviour)</span>
                 </div>
-                <button id="checkout_arrive_btn" onclick="arriveAtCheckoutStation()" class="btn btn-blue" style="margin:0; padding:8px 20px; font-weight:700;">Check In</button>
+                <button id="checkout_arrive_btn" onclick="arriveAtCheckoutStation()" class="btn btn-blue" style="margin:0; padding:8px 20px; font-weight:700;">Check Out Counter</button>
             </div>
         </div>
         """
@@ -792,6 +798,19 @@ async def get_dashboard(
             <p style="color:var(--text-muted); font-size:0.9rem;">
                 Speak into your microphone or choose a preset below to report an out-of-stock item (e.g. "I couldn't find organic bananas") or request a product suggestion (e.g. "We need kimchi").
             </p>
+            
+            <!-- OS-Specific Microphone Setup Guide -->
+            <div id="dashboard_mic_guide_container" style="background:rgba(59,130,246,0.06); border:1px solid rgba(59,130,246,0.15); padding:10px; border-radius:8px; font-size:0.8rem; margin-bottom:12px;">
+                <details>
+                    <summary id="dashboard_mic_summary" style="color:var(--accent-blue); font-weight:700; cursor:pointer; outline:none;">🎙️ Microphone Setup Guide</summary>
+                    <ul id="dashboard_mic_list" style="margin:6px 0 0 16px; padding:0; color:var(--text-muted); line-height:1.45;">
+                        <li>Click the <strong>lock/settings icon</strong> 🔒 next to the browser URL address bar.</li>
+                        <li>Ensure <strong>Microphone</strong> permission is set to <strong>Allow</strong>.</li>
+                        <li id="dashboard_os_mic_step">Please enable microphone access in your system settings.</li>
+                    </ul>
+                </details>
+            </div>
+            
             {"<div style='background:rgba(245,158,11,0.06); border:1px solid rgba(245,158,11,0.15); padding:10px; border-radius:8px; font-size:0.85rem; line-height:1.4; color:var(--accent-yellow); margin-bottom:12px;'>⚠️ <strong>Note:</strong> Since you are not in the Ambassador program, submissions will not earn Sam's Points. <a href='/enroll?member_id=" + member_id + "' style='color:#fff; font-weight:700;'>Join program now</a>.</div>" if not is_ambassador else ""}
             <div style="display:flex; gap:16px; align-items:center; margin-bottom:8px;">
                 <button type="button" class="btn" id="mic_btn" style="background:var(--accent-red); width:52px; height:52px; border-radius:50%; padding:0; display:flex; align-items:center; justify-content:center; font-size:1.6rem; cursor:pointer;" onclick="toggleSpeech()">🎙️</button>
@@ -895,7 +914,22 @@ async def get_dashboard(
     elif error:
         alert_html = f"<div class='alert alert-danger'><strong>Error!</strong> {error}</div>"
     elif warning:
-        alert_html = f"<div class='alert alert-warning'><strong>Notice:</strong> {warning}</div>"
+        if "does not match our catalog" in warning:
+            import re
+            match = re.search(r"item '(.*?)'", warning)
+            item_name = match.group(1) if match else "this item"
+            alert_html = f"""
+            <div class='alert alert-warning' style='display:flex; flex-direction:column; gap:12px; align-items:flex-start;'>
+                <div style='margin:0;'><strong>Notice:</strong> {warning}</div>
+                <form action='/suggest-product' method='POST' style='margin:0;'>
+                    <input type='hidden' name='member_id' value='{member_id}'>
+                    <input type='hidden' name='description' value='{item_name}'>
+                    <button type='submit' class='btn btn-green' style='padding:6px 16px; font-size:0.85rem; font-weight:700; border-radius:6px; margin:0;'>💡 Propose '{item_name}' as a New Product</button>
+                </form>
+            </div>
+            """
+        else:
+            alert_html = f"<div class='alert alert-warning'><strong>Notice:</strong> {warning}</div>"
 
     signals_rows = ""
     if not signals:
@@ -1007,16 +1041,33 @@ async def get_dashboard(
                 </div>
             </div>
             
+            <!-- Checkout Station Check-in -->
+            {checkout_status_html}
+
             <!-- Voice Signal Assistant -->
             <div class="glass-card" style="display:flex; flex-direction:column; gap:16px; margin-bottom:20px;">
                 <h2 style="color:var(--accent-blue)">🎙️ Voice Signal Assistant</h2>
                 {voice_card_html}
             </div>
 
-            <!-- Checkout Station Check-in -->
-            {checkout_status_html}
-
             <script>
+                // Detect OS to update Dashboard Mic Guide dynamically
+                (function() {{
+                    const isWin = navigator.userAgent.toLowerCase().includes('win');
+                    const isMac = navigator.userAgent.toLowerCase().includes('mac');
+                    const osSummaryText = isWin ? "Windows & Google Chrome Microphone Setup Guide" : (isMac ? "macOS & Google Chrome Microphone Setup Guide" : "Microphone Setup Guide");
+                    const osStepText = isWin 
+                        ? 'On Windows Settings: Open <em>Privacy & Security &gt; Microphone</em> and toggle on <em>"Allow apps to access your microphone"</em>.' 
+                        : (isMac ? 'On macOS Settings: Open <em>System Settings &gt; Privacy & Security &gt; Microphone</em> and ensure your browser has permission.' : 'Please enable microphone access in your system settings.');
+                    
+                    setTimeout(() => {{
+                        const summaryElem = document.getElementById('dashboard_mic_summary');
+                        const stepElem = document.getElementById('dashboard_os_mic_step');
+                        if (summaryElem) summaryElem.innerHTML = "🎙️ " + osSummaryText;
+                        if (stepElem) stepElem.innerHTML = osStepText;
+                    }}, 100);
+                }})();
+
                 let recognition;
                 let isListening = false;
                 
@@ -1073,16 +1124,21 @@ async def get_dashboard(
                 let isLiveListening = false;
                 let activeField = "response"; // 'response' or 'enrollment'
                 let isLocalProgressActive = false;
+                let micSetupDone = false;
+                let isMicConfiguring = false;
                 
                 function initLivePolling() {{
-                    memberLivePollInterval = setInterval(pollCheckoutSession, 1500);
+                    memberLivePollInterval = setInterval(pollCheckoutSession, 400);
                 }}
                 
                 function pollCheckoutSession() {{
                     fetch('/checkout/poll-member?member_id=' + currentMemberId)
-                    .then(res => res.json())
+                    .then(res => {{
+                        if (!res.ok) throw new Error("HTTP error " + res.status);
+                        return res.json();
+                    }})
                     .then(data => {{
-                        if (data.status === 'none' || !data.status || data.status === 'Done') {{
+                        if (!data || data.status === 'none' || !data.status || data.status === 'Done') {{
                             const modalVisible = document.getElementById('live_checkout_modal').style.display === 'flex';
                             document.getElementById('live_checkout_modal').style.display = 'none';
                             if (liveSpeechRecognition) {{
@@ -1100,6 +1156,74 @@ async def get_dashboard(
                         }}
                         
                         document.getElementById('live_checkout_modal').style.display = 'flex';
+                        if (data.status === 'ReadyToCheckout') {{
+                            micSetupDone = false;
+                            document.getElementById('checkout_progress_group').style.display = 'flex';
+                            document.getElementById('checkout_progress_text').innerText = 'Arrived at checkout counter. Waiting for associate...';
+                            document.getElementById('member_question_text').innerText = 'Checked In';
+                            document.getElementById('member_mic_btn').parentElement.style.display = 'none';
+                            document.getElementById('member_response_transcript').parentElement.style.display = 'none';
+                            document.getElementById('member_live_presets').style.display = 'none';
+                            document.getElementById('completed_actions_group').style.display = 'none';
+                            return;
+                        }}
+                        
+                        // Check if we need to do the mic configuration check
+                        if (!micSetupDone && (data.status === 'PendingInquiry' || data.status === 'InquirySent' || data.status === 'EnrollmentProposed' || data.status === 'ProposalProposed')) {{
+                            if (!isMicConfiguring) {{
+                                isMicConfiguring = true;
+                                isLocalProgressActive = true;
+                                
+                                document.getElementById('member_mic_btn').parentElement.style.display = 'none';
+                                document.getElementById('member_response_transcript').parentElement.style.display = 'none';
+                                document.getElementById('member_live_presets').style.display = 'none';
+                                document.getElementById('completed_actions_group').style.display = 'none';
+                                document.getElementById('checkout_progress_group').style.display = 'none'; // Hide checkout progress during mic selection
+                                
+                                function showMicPrompt(requiresPrompt) {{
+                                    if (requiresPrompt) {{
+                                        // Reset prompt UI to options
+                                        document.getElementById('checkout_mic_opt_group').innerHTML = `
+                                            <div style="color:#fff; font-size:0.9rem; font-weight:600; text-align:center;">
+                                                Would you like to reply using voice commands?
+                                            </div>
+                                            <div style="display:flex; gap:10px; justify-content:center;">
+                                                <button type="button" class="btn btn-green" id="btn_use_voice" style="padding:10px 16px; font-size:0.85rem; margin:0;" onclick="handleMicOpt('voice')">🎙️ Yes, Use Voice</button>
+                                                <button type="button" class="btn" id="btn_skip_voice" style="background:rgba(255,255,255,0.05); border:1px solid var(--glass-border); padding:10px 16px; font-size:0.85rem; margin:0;" onclick="handleMicOpt('skip')">❌ Use Buttons Only</button>
+                                            </div>
+                                        `;
+                                        document.getElementById('checkout_mic_opt_group').style.display = 'flex';
+                                        document.getElementById('checkout_mic_guide').style.display = 'none'; // Hide guide initially until they click Yes
+                                        document.getElementById('member_question_text').innerText = 'Microphone Setup Required';
+                                    }} else {{
+                                        // Permission already granted! Skip setup and show normal checkout immediately
+                                        micSetupDone = true;
+                                        isMicConfiguring = false;
+                                        isLocalProgressActive = false;
+                                        document.getElementById('checkout_mic_opt_group').style.display = 'none';
+                                    }}
+                                }}
+                                
+                                // Check permissions state
+                                if (navigator.permissions && navigator.permissions.query) {{
+                                    navigator.permissions.query({{ name: 'microphone' }})
+                                    .then(function(permissionStatus) {{
+                                        if (permissionStatus.state === 'granted') {{
+                                            showMicPrompt(false);
+                                        }} else {{
+                                            showMicPrompt(true);
+                                        }}
+                                    }})
+                                    .catch(function(err) {{
+                                        showMicPrompt(true);
+                                    }});
+                                }} else {{
+                                    showMicPrompt(true);
+                                }}
+                            }}
+                            return;
+                        }}
+                        
                         if (isLocalProgressActive) {{
                             if (data.status === 'EnrollmentComplete') {{
                                 // Enrollment done! Show enrollment confirmation, wait for TTS, then show checkout progress
@@ -1124,7 +1248,7 @@ async def get_dashboard(
                                     }});
                                 }}
                                 return;
-                            }} else if (data.status === 'EnrollmentProposed') {{
+                            }} else if (data.status === 'EnrollmentProposed' || data.status === 'ProposalProposed') {{
                                 isLocalProgressActive = false;
                                 document.getElementById('checkout_progress_group').style.display = 'none';
                                 // Fall through to normal rendering below
@@ -1141,6 +1265,8 @@ async def get_dashboard(
                         
                         // Normal rendering (not in progress lock)
                         document.getElementById('checkout_progress_group').style.display = 'none';
+                        const helpBox = document.getElementById('checkout_mic_guide');
+                        if (helpBox) helpBox.style.display = 'none';
                         document.getElementById('member_question_text').innerText = '"' + data.associate_question + '"';
                         
                         if (data.status === 'Completed') {{
@@ -1164,7 +1290,7 @@ async def get_dashboard(
                                 activeField = "response";
                                 document.getElementById('checkout_presets_group').style.display = 'flex';
                                 document.getElementById('enrollment_presets_group').style.display = 'none';
-                            }} else if (data.status === 'EnrollmentProposed') {{
+                            }} else if (data.status === 'EnrollmentProposed' || data.status === 'ProposalProposed') {{
                                 activeField = "enrollment";
                                 document.getElementById('checkout_presets_group').style.display = 'none';
                                 document.getElementById('enrollment_presets_group').style.display = 'flex';
@@ -1201,21 +1327,38 @@ async def get_dashboard(
                     }});
                 }}
                 
+                let currentUtterance = null;
+                
                 function speakQuestion(text) {{
                     if ('speechSynthesis' in window) {{
                         window.speechSynthesis.cancel();
                         const utterance = new SpeechSynthesisUtterance(text);
+                        currentUtterance = utterance; // Prevent garbage collection
                         utterance.rate = 1.0;
                         utterance.pitch = 1.0;
-                        utterance.onend = function() {{
-                            try {{
-                                if (liveSpeechRecognition && !isLiveListening) {{
-                                    liveSpeechRecognition.start();
+                        
+                        let callbackExecuted = false;
+                        const onEndCallback = function() {{
+                            if (callbackExecuted) return;
+                            callbackExecuted = true;
+                            setTimeout(function() {{
+                                try {{
+                                    if (liveSpeechRecognition && !isLiveListening) {{
+                                        liveSpeechRecognition.start();
+                                    }}
+                                }} catch(e) {{
+                                    console.error("Speech recognition start failed:", e);
                                 }}
-                            }} catch(e) {{
-                                console.error("Speech recognition start failed:", e);
-                            }}
+                            }}, 1500);
                         }};
+                        
+                        utterance.onend = onEndCallback;
+                        utterance.onerror = onEndCallback;
+                        
+                        // Safety timeout fallback (120ms per character + 1500ms safety margin)
+                        const estimatedDuration = (text.length * 120) + 1500;
+                        setTimeout(onEndCallback, estimatedDuration);
+                        
                         window.speechSynthesis.speak(utterance);
                     }}
                 }}
@@ -1224,11 +1367,23 @@ async def get_dashboard(
                     if ('speechSynthesis' in window) {{
                         window.speechSynthesis.cancel();
                         const utterance = new SpeechSynthesisUtterance(text);
+                        currentUtterance = utterance; // Prevent garbage collection
                         utterance.rate = 1.0;
                         utterance.pitch = 1.0;
-                        utterance.onend = function() {{
-                            if (callback) callback();
+                        
+                        let callbackExecuted = false;
+                        const onEndCallback = function() {{
+                            if (callbackExecuted) return;
+                            callbackExecuted = true;
+                            if (callback) setTimeout(callback, 1500);
                         }};
+                        
+                        utterance.onend = onEndCallback;
+                        utterance.onerror = onEndCallback;
+                        
+                        const estimatedDuration = (text.length * 120) + 1500;
+                        setTimeout(onEndCallback, estimatedDuration);
+                        
                         window.speechSynthesis.speak(utterance);
                     }} else {{
                         if (callback) setTimeout(callback, 2000);
@@ -1293,6 +1448,53 @@ async def get_dashboard(
                             micBtn.style.cursor = 'not-allowed';
                         }}
                     }}, 500);
+                }}
+                
+                function handleMicOpt(choice) {{
+                    if (choice === 'skip') {{
+                        micSetupDone = true;
+                        isMicConfiguring = false;
+                        isLocalProgressActive = false;
+                        document.getElementById('checkout_mic_opt_group').style.display = 'none';
+                        document.getElementById('checkout_mic_guide').style.display = 'none';
+                    }} else if (choice === 'voice') {{
+                        const isWin = navigator.userAgent.toLowerCase().includes('win');
+                        const isMac = navigator.userAgent.toLowerCase().includes('mac');
+                        const osText = isWin ? 'Windows' : (isMac ? 'macOS' : 'your device');
+                        const osHelpLink = isWin 
+                            ? 'On Windows: Open <em>Settings &gt; Privacy &gt; Microphone</em> and toggle on <em>"Allow apps to access your microphone"</em>.' 
+                            : 'On macOS: Open <em>System Settings &gt; Privacy & Security &gt; Microphone</em> and ensure your browser has access.';
+                        
+                        const helpBox = document.getElementById('checkout_mic_guide');
+                        if (helpBox) {{
+                            helpBox.innerHTML = `
+                                <div style="color:#f59e0b; font-weight:700; display:flex; align-items:center; gap:6px; font-size:0.85rem;">
+                                    🎙️ ${{osText}} & Google Chrome Microphone Guide:
+                                </div>
+                                <ul style="margin:6px 0 0 16px; padding:0; color:var(--text-muted); line-height:1.45;">
+                                    <li>Click the <strong>lock/settings icon</strong> 🔒 next to the browser URL address bar.</li>
+                                    <li>Ensure <strong>Microphone</strong> permission is set to <strong>Allow</strong>.</li>
+                                    <li>${{osHelpLink}}</li>
+                                </ul>
+                            `;
+                            helpBox.style.display = 'flex';
+                        }}
+                        
+                        document.getElementById('checkout_mic_opt_group').innerHTML = `
+                            <div style="color:#f59e0b; font-size:0.9rem; font-weight:600; text-align:center; line-height:1.4;">
+                                Please follow the instructions above to enable your microphone.
+                            </div>
+                            <button type="button" class="btn btn-green" style="padding:12px; font-weight:700; margin:0;" onclick="confirmMicReady()">🎙️ I'm Ready, Start listening</button>
+                            <button type="button" class="btn" style="background:none; border:none; color:var(--text-muted); font-size:0.8rem; text-decoration:underline; cursor:pointer;" onclick="handleMicOpt('skip')">Or switch to presets/buttons</button>
+                        `;
+                    }}
+                }}
+                
+                function confirmMicReady() {{
+                    micSetupDone = true;
+                    isMicConfiguring = false;
+                    isLocalProgressActive = false;
+                    document.getElementById('checkout_mic_opt_group').style.display = 'none';
                 }}
                 
                 function toggleMemberLiveSpeech() {{
@@ -1394,9 +1596,8 @@ async def get_dashboard(
                             btn.style.background = '#10b981';
                             btn.disabled = true;
                         }}
-                        setTimeout(() => {{
-                            window.location.reload();
-                        }}, 1500);
+                        // Trigger polling immediately to open the waiting modal without a page reload
+                        pollCheckoutSession();
                     }})
                     .catch(err => {{
                         console.error("Arrive error:", err);
@@ -1454,6 +1655,29 @@ async def get_dashboard(
                     <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid var(--glass-border); padding-bottom:12px;">
                         <h2 style="color:var(--accent-blue); margin:0; display:flex; align-items:center; gap:8px;">🛒 Live Checkout Assistant</h2>
                         <span id="member_live_badge" style="background:#f59e0b; color:#fff; padding:4px 10px; border-radius:12px; font-size:0.75rem; font-weight:700; text-transform:uppercase;">Active Inquiry</span>
+                    </div>
+                    
+                    <!-- Windows & Chrome Microphone Guide -->
+                    <div id="checkout_mic_guide" style="display:none; background:rgba(245,158,11,0.06); border:1px solid rgba(245,158,11,0.25); padding:10px 12px; border-radius:10px; font-size:0.8rem; line-height:1.45; flex-direction:column; gap:4px;">
+                        <div style="color:#f59e0b; font-weight:700; display:flex; align-items:center; gap:6px; font-size:0.85rem;">
+                            🎙️ Windows & Google Chrome Microphone Guide:
+                        </div>
+                        <ul style="margin:0; padding-left:16px; color:var(--text-muted);">
+                            <li>Click the <strong>lock/settings icon</strong> 🔒 next to the browser URL.</li>
+                            <li>Ensure <strong>Microphone</strong> permission is set to <strong>Allow</strong>.</li>
+                            <li>On Windows Settings: <em>Privacy & Security &gt; Microphone</em> &gt; Allow apps to access your mic.</li>
+                        </ul>
+                    </div>
+                    
+                    <!-- Microphone Choice Prompt -->
+                    <div id="checkout_mic_opt_group" style="display:none; flex-direction:column; gap:12px; background:rgba(255,255,255,0.02); padding:16px; border-radius:10px; border:1px solid var(--glass-border);">
+                        <div style="color:#fff; font-size:0.9rem; font-weight:600; text-align:center;">
+                            Would you like to reply using voice commands?
+                        </div>
+                        <div style="display:flex; gap:10px; justify-content:center;">
+                            <button type="button" class="btn btn-green" id="btn_use_voice" style="padding:10px 16px; font-size:0.85rem; margin:0;" onclick="handleMicOpt('voice')">🎙️ Yes, Use Voice</button>
+                            <button type="button" class="btn" style="background:rgba(255,255,255,0.05); border:1px solid var(--glass-border); padding:10px 16px; font-size:0.85rem; margin:0;" onclick="handleMicOpt('skip')">❌ Use Buttons Only</button>
+                        </div>
                     </div>
                     
                     <div style="display:flex; flex-direction:column; gap:8px;">
@@ -1666,8 +1890,14 @@ async def suggest_product(request: Request, member_id: str = Form(...), descript
             status_code=status.HTTP_303_SEE_OTHER
         )
     except Exception as e:
+        err_str = str(e)
+        if "already requested this item" in err_str or "already proposed" in err_str:
+            return RedirectResponse(
+                url=f"/dashboard?member_id={member_id}&warning={err_str}",
+                status_code=status.HTTP_303_SEE_OTHER
+            )
         return RedirectResponse(
-            url=f"/dashboard?member_id={member_id}&error={str(e)}",
+            url=f"/dashboard?member_id={member_id}&error={err_str}",
             status_code=status.HTTP_303_SEE_OTHER
         )
 
@@ -1738,23 +1968,57 @@ async def process_member_voice(request: Request, member_id: str = Form(...), tra
         msg = f"Voice signal successfully processed: '{transcript}'"
         
         # Inspect backend returned status
-        events = result.get("events", [])
-        outcome_status = "ok"
+        outcome_status = "Success"
         outcome_msg = ""
-        for ev in reversed(events):
-            if isinstance(ev, dict) and ev.get("output"):
-                out = ev["output"]
-                if isinstance(out, dict):
-                    outcome_status = out.get("status", "Success")
-                    outcome_msg = out.get("message", "")
-                    break
+        
+        # 1. HTTP API Response format: list of events
+        if "events" in result and isinstance(result["events"], list):
+            events = result["events"]
+            for ev in reversed(events):
+                if isinstance(ev, dict) and ev.get("output"):
+                    out = ev["output"]
+                    if isinstance(out, dict):
+                        outcome_status = out.get("status", "Success")
+                        outcome_msg = out.get("message", "")
+                        break
+                    elif hasattr(out, "dict"):
+                        out_dict = out.dict()
+                        outcome_status = out_dict.get("status", "Success")
+                        outcome_msg = out_dict.get("message", "")
+                        break
+                    elif hasattr(out, "model_dump"):
+                        out_dict = out.model_dump()
+                        outcome_status = out_dict.get("status", "Success")
+                        outcome_msg = out_dict.get("message", "")
+                        break
+                    else:
+                        outcome_status = getattr(out, "status", "Success")
+                        outcome_msg = getattr(out, "message", "")
+                        break
+        # 2. In-Process Fallback/Direct Response format: Event dict
+        elif "output" in result:
+            out = result["output"]
+            if isinstance(out, dict):
+                outcome_status = out.get("status", "Success")
+                outcome_msg = out.get("message", "")
+            elif hasattr(out, "dict"):
+                out_dict = out.dict()
+                outcome_status = out_dict.get("status", "Success")
+                outcome_msg = out_dict.get("message", "")
+            elif hasattr(out, "model_dump"):
+                out_dict = out.model_dump()
+                outcome_status = out_dict.get("status", "Success")
+                outcome_msg = out_dict.get("message", "")
+            else:
+                outcome_status = getattr(out, "status", "Success")
+                outcome_msg = getattr(out, "message", "")
                     
         if outcome_status in ("Success", "Closed - Restocked"):
             return RedirectResponse(
                 url=f"/dashboard?member_id={member_id}&success={outcome_msg or msg}",
                 status_code=status.HTTP_303_SEE_OTHER
             )
-        elif outcome_status == "Unverified":
+        elif outcome_status in ("Unverified", "Unmatched"):
             return RedirectResponse(
                 url=f"/dashboard?member_id={member_id}&warning={outcome_msg or msg}",
                 status_code=status.HTTP_303_SEE_OTHER
@@ -1765,8 +2029,14 @@ async def process_member_voice(request: Request, member_id: str = Form(...), tra
                 status_code=status.HTTP_303_SEE_OTHER
             )
     except Exception as e:
+        err_str = str(e)
+        if "already requested this item" in err_str or "already proposed" in err_str:
+            return RedirectResponse(
+                url=f"/dashboard?member_id={member_id}&warning={err_str}",
+                status_code=status.HTTP_303_SEE_OTHER
+            )
         return RedirectResponse(
-            url=f"/dashboard?member_id={member_id}&error={str(e)}",
+            url=f"/dashboard?member_id={member_id}&error={err_str}",
             status_code=status.HTTP_303_SEE_OTHER
         )
 

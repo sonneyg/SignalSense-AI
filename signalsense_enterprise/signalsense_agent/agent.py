@@ -422,7 +422,7 @@ def handle_suggestion_analysis(ctx: Context, node_input: Any) -> Event:
         if original_proposer == member_id:
             # Original proposer cannot propose it again
             conn.close()
-            msg = f"Product suggestion rejected: You have already proposed '{description}'."
+            msg = "You already requested this item and it is active. You were given points for this action. If enough customers propose this item we will make a decision to launch it. Thank you!"
             return Event(
                 output={"status": "Rejected", "message": msg},
                 state={
@@ -537,7 +537,11 @@ def handle_suggestion_analysis(ctx: Context, node_input: Any) -> Event:
     conn.commit()
     conn.close()
     
-    msg = f"Product proposal '{description}' submitted in department '{dept}'. Awarded {points} points."
+    msg = (
+        f"We have added {description} as your new product recommendation and you are getting reward points for that. "
+        "We will notify you when we decide to launch it. You may be eligible for a discount as one of the original proposers. "
+        f"Remember to buy it to show you really cared about having {description}!"
+    )
     return Event(
         output={"status": "Success", "message": msg},
         state={
@@ -872,12 +876,16 @@ def handle_voice_analysis(ctx: Context, node_input: Any) -> Event:
                 break
                 
     if not matched_item_id:
+        # Route uncarried OOS item to ProductSuggestion flow
+        ctx.state["description"] = extracted_item
+        ctx.state["suggestion_analysis"] = {
+            "is_appropriate": True,
+            "department": "Produce" if "banana" in extracted_item.lower() or "kimchi" in extracted_item.lower() else "Grocery",
+            "suggested_category": "Trending Items",
+            "reasoning": "Uncarried OOS item reported via Voice Signal; automatically routed to product suggestion."
+        }
         conn.close()
-        msg = f"Voice report processed. Detected out-of-stock item '{extracted_item}', but it does not match our catalog."
-        return Event(
-            output={"status": "Unmatched", "message": msg},
-            state={"status": "Unmatched", "outcome_message": msg}
-        )
+        return handle_suggestion_analysis(ctx, node_input)
         
     # Execute process_oos database operations on the matched item
     cursor.execute(
