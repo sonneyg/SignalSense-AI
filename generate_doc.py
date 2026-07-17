@@ -15,7 +15,7 @@ output_docx = os.path.join(workspace_dir, "architecture_and_workflow.docx")
 
 # Verify local slides exist or fallback to brain paths
 if not os.path.exists(img_arch_path):
-    img_arch_path = "/Users/sonneygeorge/.gemini/antigravity-ide/brain/eebc334b-f6c4-4c8f-b9b3-020528b29284/high_level_architecture_1784291350898.png"
+    img_arch_path = "/Users/sonneygeorge/.gemini/antigravity-ide/brain/eebc334b-f6c4-4c8f-b9b3-020528b29284/high_level_architecture_v3_1784299149788.png"
 if not os.path.exists(img_workflow_path):
     img_workflow_path = "/Users/sonneygeorge/.gemini/antigravity-ide/brain/eebc334b-f6c4-4c8f-b9b3-020528b29284/backend_graph_workflow_1783230599635.png"
 if not os.path.exists(img_loop_path):
