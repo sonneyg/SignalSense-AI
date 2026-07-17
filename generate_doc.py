@@ -19,7 +19,7 @@ if not os.path.exists(img_arch_path):
 if not os.path.exists(img_workflow_path):
     img_workflow_path = "/Users/sonneygeorge/.gemini/antigravity-ide/brain/eebc334b-f6c4-4c8f-b9b3-020528b29284/backend_graph_workflow_1783230599635.png"
 if not os.path.exists(img_loop_path):
-    img_loop_path = "/Users/sonneygeorge/.gemini/antigravity-ide/brain/eebc334b-f6c4-4c8f-b9b3-020528b29284/system_signal_flow_loop_1784293819715.png"
+    img_loop_path = "/Users/sonneygeorge/.gemini/antigravity-ide/brain/eebc334b-f6c4-4c8f-b9b3-020528b29284/system_signal_flow_loop_v2_1784294766996.png"
 
 print("Reading and encoding images to Base64...")
 with open(img_arch_path, "rb") as f:

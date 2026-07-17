@@ -49,10 +49,15 @@ Beyond individual microservice bounds, the platform operates as a closed-loop sy
 
 ![System Signal Flow Loop Diagram](slides/system_signal_flow_loop.png)
 
-1. **Signal Ingestion:** Members submit voice stockouts, OOS forms, or suggestions via the Member App, triggering REST API signals to the FastAPI backend.
-2. **Context Parsing & DB Update:** The backend queries the shared database to resolve inventory/credentials, analyzes intent, and inserts a pending Associate task.
-3. **Operational Resolution:** Store associates view tasks in their specific workspace on the Operations Dashboard. Clicks (audits, dc transfers, suggestion approvals) trigger Associate action signals to the backend.
-4. **Outcome Commit:** The backend processes associate inputs (completing audits, escalating stockout thresholds, approving catalog entries), updates records in the database, and awards reward points back to the Member.
+1. **Signal Ingestion:** Members interact at the checkout counter (assisted by the **Checkout Associate** via live voice sessions) or submit OOS reports and product suggestions via the Member App, triggering REST signals to the FastAPI backend.
+2. **Context Parsing & Backend Logic:** The backend queries the shared database to verify credentials, resolve inventory, and manage **Ambassador programs (including sign-ups, reward points, and Member Trust metrics)**. It then inserts pending tasks or suggestions.
+3. **Operational Resolution:** Store associates act on signals via the Operations Dashboard:
+   * **Checkout Associates** orchestrate live checkout voice counter coordination.
+   * **Club Associates** perform physical shelf and backroom verifications.
+   * **Inventory Associates** manage stock replenishments and distribution center transfers.
+   * **Merchants** manage catalogs including merchant reporting thresholds, rewards, and trust metrics.
+   Resolutions dispatch action signals back to the backend.
+4. **Outcome Commit:** The backend processes associate inputs (completing shelf audits, managing inventory verifications, management including trust metrics and escalations, or approving suggestions), writes the final state back to the database, and updates Ambassador rewards.
 
 ### Decoupling & Sandboxed Resiliency
 * **Stand-Alone HTTP APIs:** The Member App and Dashboard run as separate FastAPI services. They communicate with the ADK agent running as a standalone runtime app.
