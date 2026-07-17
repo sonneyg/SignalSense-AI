@@ -43,6 +43,17 @@ The system is decoupled into three independent microservices that communicate ov
 
 ![High Level System Architecture Diagram](slides/high_level_architecture.png)
 
+### 🔄 Bi-Directional System Signal Loop
+
+Beyond individual microservice bounds, the platform operates as a closed-loop system coordinating member inputs and operational associate tasks:
+
+![System Signal Flow Loop Diagram](slides/system_signal_flow_loop.png)
+
+1. **Signal Ingestion:** Members submit voice stockouts, OOS forms, or suggestions via the Member App, triggering REST API signals to the FastAPI backend.
+2. **Context Parsing & DB Update:** The backend queries the shared database to resolve inventory/credentials, analyzes intent, and inserts a pending Associate task.
+3. **Operational Resolution:** Store associates view tasks in their specific workspace on the Operations Dashboard. Clicks (audits, dc transfers, suggestion approvals) trigger Associate action signals to the backend.
+4. **Outcome Commit:** The backend processes associate inputs (completing audits, escalating stockout thresholds, approving catalog entries), updates records in the database, and awards reward points back to the Member.
+
 ### Decoupling & Sandboxed Resiliency
 * **Stand-Alone HTTP APIs:** The Member App and Dashboard run as separate FastAPI services. They communicate with the ADK agent running as a standalone runtime app.
 * **In-Process Fallback:** If the standalone backend is offline, both frontends gracefully fall back to executing the ADK agent **in-process** via a local `Runner` instance. This ensures the app is self-healing and operates successfully in sandboxed CI/CD testing environments.
