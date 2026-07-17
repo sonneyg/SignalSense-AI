@@ -30,7 +30,7 @@ Traditional retail inventory tracking suffers from latency:
 ## ✨ The Solution
 
 **SignalSense AI** solves these issues through a decoupled, state-machine-driven microservices architecture:
-1. **Live Checkout Assistant:** A real-time voice-interactive checkout overlay. It parses member responses using Chrome's Speech Recognition & Synthesis APIs.
+1. **Voice Chat with Simulated Checkout:** A novel real-time, bi-directional voice-interactive checkout assistant. It processes member spoken responses using Chrome's Web Speech APIs (Speech Recognition & Synthesis) to simulate a conversational retail checkout counter, eliminating the need for physical checkout hardware.
 2. **Ambassador Program Integration:** Automatically checks member profiles. Non-Ambassadors reporting stock-outs are prompted via voice to enroll on the spot to earn reward points.
 3. **Smart Product Suggestions:** If a member reports a missing item that the store doesn't carry (e.g., *Kimchi*), the system automatically routes the request as a new product recommendation instead of an OOS report, letting merchants review it.
 4. **Decoupled Architecture:** Frontend applications communicate with the backend ADK Agent via standalone HTTP APIs, backed by a resilient in-process fallback runner.
@@ -75,7 +75,7 @@ Inside the backend agent, execution follows a strict directed graph defined usin
 
 ## 🔄 Agentic Workflows & State Machine
 
-The Live Checkout Assistant operates on a coordinated state machine:
+The Voice Chat with Simulated Checkout session operates on a coordinated state machine:
 
 ```mermaid
 stateDiagram-v2
